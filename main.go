@@ -63,9 +63,6 @@ var (
 	ccs constraint.ConstraintSystem
 	pk  groth16.ProvingKey
 	vk  groth16.VerifyingKey
-	//storedHash big.Int
-	//storedSalt [16]frontend.Variable
-	//rawSalt []byte
 )
 
 func initZK() {
@@ -80,22 +77,6 @@ func initZK() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	
-	//storedSalt, rawSalt, err = generateSalt()
-	//if err != nil {
-	//	log.Fatal("salt generation error", err)
-	//}
-
-	//passwordInt := new(big.Int).SetInt64(1234)
-	
-	//hasher := gnarkmimc.NewMiMC()
-	//for i := 0; i < len(rawSalt); i++ {
-	//	hasher.Write([]byte{rawSalt[i]})
-	//}
-	//hasher.Write(bigIntToBytes(passwordInt))
-
-	//digest := hasher.Sum(nil)
-	//storedHash.SetBytes(digest)
 }
 
 func bigIntToBytes (x *big.Int) []byte {
@@ -158,7 +139,7 @@ func proveHandler(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "salt generation error"})
 	}
-	
+
 	for i := 0; i < len(rawSalt); i++ {
 		hasher.Write(([]byte{rawSalt[i]}))
 	}
