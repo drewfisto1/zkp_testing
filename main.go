@@ -3,9 +3,12 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"math/big"
 	"net/http"
+	"os"
+	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
@@ -60,9 +63,9 @@ var (
 	ccs constraint.ConstraintSystem
 	pk  groth16.ProvingKey
 	vk  groth16.VerifyingKey
-	storedHash big.Int
-	storedSalt [16]frontend.Variable
-	rawSalt []byte
+	//storedHash big.Int
+	//storedSalt [16]frontend.Variable
+	//rawSalt []byte
 )
 
 func initZK() {
@@ -78,21 +81,21 @@ func initZK() {
 		log.Fatal(err)
 	}
 	
-	storedSalt, rawSalt, err = generateSalt()
-	if err != nil {
-		log.Fatal("salt generation error", err)
-	}
+	//storedSalt, rawSalt, err = generateSalt()
+	//if err != nil {
+	//	log.Fatal("salt generation error", err)
+	//}
 
-	passwordInt := new(big.Int).SetInt64(1234)
+	//passwordInt := new(big.Int).SetInt64(1234)
 	
-	hasher := gnarkmimc.NewMiMC()
-	for i := 0; i < len(rawSalt); i++ {
-		hasher.Write([]byte{rawSalt[i]})
-	}
-	hasher.Write(bigIntToBytes(passwordInt))
+	//hasher := gnarkmimc.NewMiMC()
+	//for i := 0; i < len(rawSalt); i++ {
+	//	hasher.Write([]byte{rawSalt[i]})
+	//}
+	//hasher.Write(bigIntToBytes(passwordInt))
 
-	digest := hasher.Sum(nil)
-	storedHash.SetBytes(digest)
+	//digest := hasher.Sum(nil)
+	//storedHash.SetBytes(digest)
 }
 
 func bigIntToBytes (x *big.Int) []byte {
@@ -118,16 +121,44 @@ func generateSalt() ([16]frontend.Variable, []byte, error) {
 	return salt, rawSalt, nil
 }
 
+func logAttempt(time time.Time, result string, step string) {
+	f, err := os.OpenFile("log.txt", os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil  {
+		fmt.Println(err)
+		return
+	}
+
+	line := "Time: " + time.Format("2006-01-02 03:04:05PM") + ", Result " + result + ", Step: " + step
+	_, err = fmt.Fprintln(f, line)
+	if err != nil {
+		fmt.Println(err)
+		f.Close()
+		return
+	}
+
+	err = f.Close()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+}
+
 func proveHandler(c echo.Context) error {
 	var input Input
 	err := c.Bind(&input);
 	if err != nil {
+		logAttempt(time.Now().Local(), "fail", "input")
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid input"})
 	}
 
 	passwordInt := new(big.Int).SetInt64(int64(input.Password))
 
 	hasher := gnarkmimc.NewMiMC()
+	salt, rawSalt, err := generateSalt()
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "salt generation error"})
+	}
+	
 	for i := 0; i < len(rawSalt); i++ {
 		hasher.Write(([]byte{rawSalt[i]}))
 	}
@@ -140,26 +171,30 @@ func proveHandler(c echo.Context) error {
 
 	assignment := PasswordCircuit {
 		Password: [1]frontend.Variable {passwordInt},
-		Hash: storedHash,
-		Salt: storedSalt,
+		Hash: hash,
+		Salt: salt,
 	}
 
 	witness, err := frontend.NewWitness(&assignment, ecc.BN254.ScalarField())
 	if err != nil {
+		logAttempt(time.Now().Local(), "fail", "witness generation")
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "witness creation failed"})
 	}
 	publicWitness, err := witness.Public()
 	if err != nil {
+		logAttempt(time.Now().Local(), "fail", "public witness")
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "public witness error"})
 	}
 
 	proof, err := groth16.Prove(ccs, pk, witness)
 	if err != nil {
+		logAttempt(time.Now().Local(), "fail", "proof generation")
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "proof generation error"})
 	}
 
 	err = groth16.Verify(proof, vk, publicWitness)
 	if err != nil {
+		logAttempt(time.Now().Local(), "fail", "verification")
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "verification failed"})
 	} 
 	
@@ -169,12 +204,13 @@ func proveHandler(c echo.Context) error {
 		Salt: 		hex.EncodeToString(rawSalt),
 		Valid:		true,
 	}
+
+	logAttempt(time.Now().Local(), "success", "verification")
 	return c.JSON(http.StatusOK, response)
 }
 
 func main() {
 	initZK()
-
 	e := echo.New()
 	e.POST("/prove", proveHandler)
 	e.Logger.Fatal(e.Start(":8080"))
