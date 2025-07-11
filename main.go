@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"math/big"
@@ -24,7 +23,6 @@ import (
 type PasswordCircuit struct {
 	Password [1]frontend.Variable 
 	Hash frontend.Variable `gnark:",public"`
-	Salt [16]frontend.Variable
 }
 
 func (circuit *PasswordCircuit) Define(api frontend.API) error {
@@ -33,7 +31,7 @@ func (circuit *PasswordCircuit) Define(api frontend.API) error {
 	if err != nil {
 		return err
 	}
-	for _, salt := range circuit.Salt {
+	for _, salt := range fixedSalt {
 		hasher.Write(salt)
 	}
  
@@ -41,6 +39,7 @@ func (circuit *PasswordCircuit) Define(api frontend.API) error {
 		hasher.Write(pass)
 	}
 
+	hasher.Write(nonce)
 	hash := hasher.Sum()
 	api.AssertIsEqual(hash, circuit.Hash)
 
@@ -54,7 +53,7 @@ type Input struct {
 type Response struct {
 	Password	int		`json:"password"`
 	Hash		string 	`json:"hash"`
-	Salt 		string 	`json:"salt"`
+	Nonce 		string 	`json:"nonce"`
 	Valid		bool	`json:"valid"`
 	Error		string	`json:"error,omitempty"`
 }
@@ -63,9 +62,30 @@ var (
 	ccs constraint.ConstraintSystem
 	pk  groth16.ProvingKey
 	vk  groth16.VerifyingKey
+	fixedSalt    [16]byte
+	fixedSaltVar [16]frontend.Variable
+	expectedHash big.Int
+	nonce 		 *big.Int
 )
 
 func initZK() {
+	password := int64(1234)
+	fixedSalt = [16]byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00}
+	nonce, _ = generateNonce()
+
+	hasher := gnarkmimc.NewMiMC()
+	for _, b := range fixedSalt {
+		hasher.Write([]byte{b})
+	}
+	hasher.Write(bigIntToBytes(big.NewInt(password)))
+	hasher.Write(bigIntToBytes(nonce))
+	digest := hasher.Sum(nil)
+	expectedHash.SetBytes(digest)
+
+	for i, b := range fixedSalt {
+		fixedSaltVar[i] = big.NewInt(int64(b))
+	}
+
 	var circuit PasswordCircuit
 	var err error
 	ccs, err = frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit)
@@ -102,6 +122,15 @@ func generateSalt() ([16]frontend.Variable, []byte, error) {
 	return salt, rawSalt, nil
 }
 
+func generateNonce() (*big.Int, error) {
+	nonceBytes := make([]byte, 4)
+	_, err := rand.Read(nonceBytes)
+	if err != nil {
+		return nil, err
+	}
+	return new(big.Int).SetBytes(nonceBytes), nil
+}
+
 func logAttempt(time time.Time, result string, step string) {
 	f, err := os.OpenFile("log.txt", os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil  {
@@ -125,6 +154,8 @@ func logAttempt(time time.Time, result string, step string) {
 }
 
 func proveHandler(c echo.Context) error {
+	initZK()
+
 	var input Input
 	err := c.Bind(&input);
 	if err != nil {
@@ -135,25 +166,21 @@ func proveHandler(c echo.Context) error {
 	passwordInt := new(big.Int).SetInt64(int64(input.Password))
 
 	hasher := gnarkmimc.NewMiMC()
-	salt, rawSalt, err := generateSalt()
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "salt generation error"})
-	}
 
-	for i := 0; i < len(rawSalt); i++ {
-		hasher.Write(([]byte{rawSalt[i]}))
+	for i := 0; i < len(fixedSalt); i++ {
+		hasher.Write(([]byte{fixedSalt[i]}))
 	}
-	hasher.Write((bigIntToBytes(passwordInt)))
+	hasher.Write(bigIntToBytes(passwordInt))
+	hasher.Write(bigIntToBytes(nonce))
 
 	digest := hasher.Sum(nil)
 	var hash big.Int
 	hash.SetBytes(digest)
-
+	
 
 	assignment := PasswordCircuit {
 		Password: [1]frontend.Variable {passwordInt},
-		Hash: hash,
-		Salt: salt,
+		Hash: expectedHash,
 	}
 
 	witness, err := frontend.NewWitness(&assignment, ecc.BN254.ScalarField())
@@ -182,7 +209,7 @@ func proveHandler(c echo.Context) error {
 	response := Response{
 		Password:	input.Password,
 		Hash:     	hash.String(),
-		Salt: 		hex.EncodeToString(rawSalt),
+		Nonce: 		nonce.Text(16),
 		Valid:		true,
 	}
 
@@ -191,7 +218,7 @@ func proveHandler(c echo.Context) error {
 }
 
 func main() {
-	initZK()
+	//initZK()
 	e := echo.New()
 	e.POST("/prove", proveHandler)
 	e.Logger.Fatal(e.Start(":8080"))
