@@ -17,7 +17,9 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 	"github.com/consensys/gnark/std/hash/mimc"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 )
 
 type PasswordCircuit struct {
@@ -47,21 +49,20 @@ func (circuit *PasswordCircuit) Define(api frontend.API) error {
 }
 
 type Input struct {
-	Password int `json:"password"`
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 type Response struct {
-	Password	int		`json:"password"`
-	Hash		string 	`json:"hash"`
-	Nonce 		string 	`json:"nonce"`
-	Valid		bool	`json:"valid"`
-	Error		string	`json:"error,omitempty"`
+	Token 	string `json:"token"`
+	Error	string	`json:"error,omitempty"`
 }
 
 var (
 	ccs constraint.ConstraintSystem
 	pk  groth16.ProvingKey
 	vk  groth16.VerifyingKey
+	jwtSecret []byte
 	fixedSalt    [16]byte
 	fixedSaltVar [16]frontend.Variable
 	expectedHash big.Int
@@ -99,6 +100,15 @@ func initZK() {
 	}
 }
 
+func initJWTSecret() {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		log.Fatal("Variable not set (JWT_SECRET)")
+	}
+
+	jwtSecret = []byte(secret)
+}
+
 func bigIntToBytes (x *big.Int) []byte {
 	var frEl fr.Element
 	frEl.SetBigInt(x)
@@ -129,6 +139,18 @@ func generateNonce() (*big.Int, error) {
 		return nil, err
 	}
 	return new(big.Int).SetBytes(nonceBytes), nil
+}
+
+func generateJWT(userID string) (string, error) {
+	claims := jwt.MapClaims{
+		"sub": userID,
+		"exp": time.Now().Add(time.Hour * 2).Unix(),
+		"iat": time.Now().Unix(),
+		"role": "user",
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtSecret)
 }
 
 func logAttempt(time time.Time, result string, step string) {
@@ -163,7 +185,8 @@ func proveHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid input"})
 	}
 
-	passwordInt := new(big.Int).SetInt64(int64(input.Password))
+	passwordInt := new(big.Int)
+	passwordInt.SetString(input.Password, 10)
 
 	hasher := gnarkmimc.NewMiMC()
 
@@ -206,20 +229,60 @@ func proveHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "verification failed"})
 	} 
 	
+	token, err := generateJWT(input.Username)
+	if err != nil {
+		logAttempt(time.Now().Local(), "fail", "token gen")
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "token generation failed"})
+	}
+
 	response := Response{
-		Password:	input.Password,
-		Hash:     	hash.String(),
-		Nonce: 		nonce.Text(16),
-		Valid:		true,
+		Token: token,
 	}
 
 	logAttempt(time.Now().Local(), "success", "verification")
+	
+	cookie := new(http.Cookie)
+	cookie.Name = "token"
+	cookie.Value = token
+	cookie.HttpOnly = true
+	cookie.Path = "/"
+	cookie.SameSite = http.SameSiteLaxMode
+	cookie.Secure = false
+
+	http.SetCookie(c.Response(), cookie)
 	return c.JSON(http.StatusOK, response)
+}
+
+func jwtVerification(c echo.Context) error {
+	authHeader := c.Request().Header.Get("Authorization")
+
+	if authHeader == "" || len(authHeader) < 8 || authHeader[:7] != "Bearer " {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	tokenStr := authHeader[7:]
+
+	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected method: %v", token.Header["alg"])
+		}
+		return jwtSecret, nil
+	})
+
+	if err != nil || !token.Valid {
+		return c.NoContent(http.StatusUnauthorized)
+	}
+
+	fmt.Println("why")
+	return c.NoContent(http.StatusOK)
 }
 
 func main() {
 	//initZK()
+	initJWTSecret()
 	e := echo.New()
+	e.Use(middleware.CORS())
 	e.POST("/prove", proveHandler)
-	e.Logger.Fatal(e.Start(":8080"))
+	e.GET("/verify", jwtVerification)
+	e.Logger.Fatal(e.Start(":1337"))
 }

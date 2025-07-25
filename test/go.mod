@@ -5,7 +5,6 @@ go 1.24.2
 require (
 	github.com/consensys/gnark v0.13.0
 	github.com/consensys/gnark-crypto v0.18.0
-	github.com/golang-jwt/jwt/v5 v5.2.3
 	github.com/labstack/echo/v4 v4.13.4
 )
 
@@ -28,5 +27,4 @@ require (
 	golang.org/x/sync v0.15.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
-	golang.org/x/time v0.11.0 // indirect
 )
