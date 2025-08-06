@@ -1,0 +1,10 @@
+CREATE DATABASE IF NOT EXISTS cavedb;
+
+USE cavedb;
+
+CREATE TABLE IF NOT EXISTS users (
+  username VARCHAR(255) PRIMARY KEY,
+  salt     VARCHAR(64) NOT NULL,
+  nonce    VARCHAR(64) NOT NULL,
+  expected_hash VARCHAR(128)
+);

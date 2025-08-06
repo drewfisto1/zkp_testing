@@ -1,24 +1,27 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
-    <link rel="stylesheet" href="style.css">
-    <script src="script.js"></script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>ZK Auth</title>
+    <link rel="stylesheet" href="style.css"/>
+    <script src="src/snarkjs.min.js"></script>
+    <script defer type="module" src="src/script.js"></script>
 </head>
 <body>
     <div>
-        <form>
-            <label for="username"> Username:
-                <input type="username" id="username"> 
-            </label>
-            <label for="password"> Password:
-                <input type="password" id="password"> 
-            </label>
-            <button type="submit">Submit</button><br>
-            <span id="err-msg"></span>
+        <h2 id="form-title">Login</h2>
+        <form id="auth-form">
+            <label for="username">Username:
+                <input type="text" id="username" required />
+            </label><br>
+            <label for="password">Password:
+                <input type="password" id="password" required />
+            </label><br>
+            <button type="submit" id="submit-btn">Login</button>
         </form>
+        <button id="toggle-btn">Switch to Register</button>
+        <p id="err-msg"></p>
     </div>
 </body>
 </html>
